@@ -20,6 +20,18 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+int
+settickets(int n)
+{
+  struct proc *p = myproc();
+  if (n < 1)
+    return -1;
+  acquire(&ptable.lock);
+  p -> tickets = n;
+  release(&ptable.lock);
+  return 0;
+}
+
 void
 pinit(void)
 {
@@ -88,6 +100,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->tickets = 1;
 
   release(&ptable.lock);
 
@@ -319,6 +332,15 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+
+static unsigned int randstate = 1;
+static unsigned int
+rand(void)
+{
+  randstate = randstate * 1103515245 + 12345;
+  return randstate;
+}
+
 void
 scheduler(void)
 {
@@ -332,9 +354,38 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+
+    int total = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if (ptable.state == RUNNABLE) {
+        total += p -> tickets;
+      }
+    }
+
+    if (total == 0) {
+      release(&ptable.lock);
+      continue;
+    }
+
+    unsigned int r = rand();
+    int winner = r % total;
+    int sum = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+
+      sum += p -> tickets;
+      if (sum > winner) {
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
+
+        c->proc = 0;
+        break;
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
